@@ -48,6 +48,14 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Debug AWS creds (temporary)
+        run: |
+          echo "AWS_ACCESS_KEY_ID is set: ${AWS_ACCESS_KEY_ID:+yes}"
+          echo "AWS_SECRET_ACCESS_KEY is set: ${AWS_SECRET_ACCESS_KEY:+yes}"
+          echo "Configured AWS region: ${AWS_REGION:-not-set}"
+          echo "Attempting to call STS to get caller identity (output masked if successful):"
+          aws sts get-caller-identity || true
+
       # Commented out - IAM roles managed manually
       # - name: Deploy IAM Roles Stack
       #   id: deploy-iam

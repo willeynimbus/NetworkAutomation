@@ -275,8 +275,8 @@ Resources:
       Name: !Sub ${EnvironmentName}-TGW-Share
       AllowExternalPrincipals: false
       Principals:
-        - !Sub 'arn:aws:iam::${SpokeAAccountId}:root'
-        - !Sub 'arn:aws:iam::${SpokeBAccountId}:root'
+        - !Ref SpokeAAccountId
+        - !Ref SpokeBAccountId
       ResourceArns:
         - !Sub 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:transit-gateway/${TransitGateway}'
       Tags:
