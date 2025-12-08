@@ -279,6 +279,25 @@ jobs:
           
           echo "✅ Spoke B instance deployed"
 
+      - name: Accept Transit Gateway Attachments in Hub
+        if: success()
+        run: |
+          set -euo pipefail
+          echo "Checking for pending TGW attachments (hub) for TGW: ${{ steps.get-tgw-id.outputs.tgw_id }}"
+          PENDING=$(aws ec2 describe-transit-gateway-attachments \
+            --filters Name=transit-gateway-id,Values=${{ steps.get-tgw-id.outputs.tgw_id }} Name=state,Values=pendingAcceptance \
+            --query 'TransitGatewayAttachments[].TransitGatewayAttachmentId' --output text || true)
+          if [ -z "$PENDING" ]; then
+            echo "No pending attachments to accept."
+          else
+            echo "Pending attachments: $PENDING"
+            for ATT in $PENDING; do
+              echo "Accepting attachment $ATT"
+              aws ec2 accept-transit-gateway-vpc-attachment --transit-gateway-attachment-id $ATT || true
+            done
+          fi
+          echo "Done accepting attachments."
+
       - name: Deployment Summary
         if: success()
         run: |
