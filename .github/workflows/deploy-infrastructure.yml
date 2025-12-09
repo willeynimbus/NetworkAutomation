@@ -279,24 +279,7 @@ jobs:
           
           echo "✅ Spoke B instance deployed"
 
-      - name: Accept Transit Gateway Attachments in Hub
-        if: success()
-        run: |
-          set -euo pipefail
-          echo "Checking for pending TGW attachments (hub) for TGW: ${{ steps.get-tgw-id.outputs.tgw_id }}"
-          PENDING=$(aws ec2 describe-transit-gateway-attachments \
-            --filters Name=transit-gateway-id,Values=${{ steps.get-tgw-id.outputs.tgw_id }} Name=state,Values=pendingAcceptance \
-            --query 'TransitGatewayAttachments[].TransitGatewayAttachmentId' --output text || true)
-          if [ -z "$PENDING" ]; then
-            echo "No pending attachments to accept."
-          else
-            echo "Pending attachments: $PENDING"
-            for ATT in $PENDING; do
-              echo "Accepting attachment $ATT"
-              aws ec2 accept-transit-gateway-vpc-attachment --transit-gateway-attachment-id $ATT || true
-            done
-          fi
-          echo "Done accepting attachments."
+      
 
       - name: Deployment Summary
         if: success()
@@ -316,4 +299,65 @@ jobs:
           echo "Next Steps:"
           echo "1. Deploy test EC2 instances for connectivity verification"
           echo "2. Run connectivity tests between spokes"
+
+  accept-attachments:
+    name: Accept Transit Gateway Attachments (Hub)
+    runs-on: ubuntu-latest
+    needs: deploy-spokes
+    if: needs.deploy-spokes.result == 'success'
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (assume hub admin role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-AcceptAttachments
+
+      - name: Get Transit Gateway ID
+        id: get-tgw-id
+        run: |
+          TGW_ID=$(aws cloudformation describe-stacks \
+            --stack-name hub-infrastructure \
+            --query "Stacks[0].Outputs[?OutputKey=='TransitGatewayId'].OutputValue" \
+            --output text --region ${{ env.AWS_REGION }})
+          echo "tgw_id=$TGW_ID" >> $GITHUB_OUTPUT
+
+      - name: Accept pending TGW attachments (with retries)
+        run: |
+          set -euo pipefail
+          TGW=${{ steps.get-tgw-id.outputs.tgw_id }}
+          echo "Checking pending attachments for TGW: $TGW"
+          # Retry a few times to allow spoke stacks to finish
+          for attempt in 1 2 3 4 5; do
+            PENDING_LINES=$(aws ec2 describe-transit-gateway-attachments \
+              --filters Name=transit-gateway-id,Values="$TGW" Name=state,Values=pendingAcceptance \
+              --query 'TransitGatewayAttachments[][TransitGatewayAttachmentId,ResourceOwnerId]' --output text || true)
+            if [ -z "$PENDING_LINES" ]; then
+              echo "No pending attachments found."
+              break
+            fi
+            echo "Pending attachments (id owner):"
+            echo "$PENDING_LINES"
+            echo "$PENDING_LINES" | while read -r ATT_ID ATT_OWNER; do
+              echo "Accepting attachment $ATT_ID from account $ATT_OWNER"
+              aws ec2 accept-transit-gateway-vpc-attachment --transit-gateway-attachment-id "$ATT_ID" || echo "Accept failed for $ATT_ID"
+            done
+            # Check if any remain
+            REMAIN=$(aws ec2 describe-transit-gateway-attachments \
+              --filters Name=transit-gateway-id,Values="$TGW" Name=state,Values=pendingAcceptance \
+              --query 'TransitGatewayAttachments[].TransitGatewayAttachmentId' --output text || true)
+            if [ -z "$REMAIN" ]; then
+              echo "All pending attachments accepted."
+              break
+            fi
+            echo "Some attachments still pending. Retry in 15s (attempt $attempt)"
+            sleep 15
+          done
 

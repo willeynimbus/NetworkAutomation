@@ -60,6 +60,23 @@ Parameters:
     Type: String
     Default: 10.2.0.0/16
 
+  EnableOrganizationSharing:
+    Description: Enable sharing the Transit Gateway via AWS RAM with an Organization ARN (true/false)
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  OrganizationArn:
+    Description: ARN of the AWS Organization or OU to share the TGW with (leave blank to disable)
+    Type: String
+    Default: ''
+
+Conditions:
+  UseOrgSharing: !And
+    - !Equals [ !Ref EnableOrganizationSharing, 'true' ]
+    - !Not [ !Equals [ !Ref OrganizationArn, '' ] ]
 Resources:
   # ============================================================================
   # VPC Resources
@@ -270,13 +287,13 @@ Resources:
   # ============================================================================
   
   TransitGatewayResourceShare:
+    Condition: UseOrgSharing
     Type: AWS::RAM::ResourceShare
     Properties:
       Name: !Sub ${EnvironmentName}-TGW-Share
       AllowExternalPrincipals: false
       Principals:
-        - !Ref SpokeAAccountId
-        - !Ref SpokeBAccountId
+        - !Ref OrganizationArn
       ResourceArns:
         - !Sub 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:transit-gateway/${TransitGateway}'
       Tags:
@@ -351,6 +368,7 @@ Outputs:
   # Resource Share Outputs
   ResourceShareArn:
     Description: Transit Gateway Resource Share ARN
+    Condition: UseOrgSharing
     Value: !Ref TransitGatewayResourceShare
     Export:
       Name: !Sub ${EnvironmentName}-TGW-ResourceShare-ARN
