@@ -182,6 +182,12 @@ jobs:
               --stack-set-name spoke-vpc \
               --template-body file://cloudformation/spoke/vpc.yaml \
               --capabilities CAPABILITY_IAM \
+              --parameters \
+                ParameterKey=EnvironmentName,ParameterValue=Spoke \
+                ParameterKey=VpcCIDR,ParameterValue=10.1.0.0/16 \
+                ParameterKey=PublicSubnetCIDR,ParameterValue=10.1.1.0/24 \
+                ParameterKey=PrivateSubnetCIDR,ParameterValue=10.1.11.0/24 \
+                ParameterKey=TransitGatewayId,ParameterValue=${{ steps.get-tgw-id.outputs.tgw_id }} \
               --administration-role-arn arn:aws:iam::${{ env.HUB_ACCOUNT_ID }}:role/AWSCloudFormationStackSetAdministrationRole \
               --execution-role-name AWSCloudFormationStackSetExecutionRole \
               --region ${{ env.AWS_REGION }}
