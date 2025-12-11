@@ -157,6 +157,26 @@ Resources:
       DestinationCidrBlock: !Ref HubVpcCIDR
       TransitGatewayId: !Ref TransitGatewayId
 
+  # Routes to Other Spoke VPCs via Transit Gateway (conditional on HasOtherSpokes)
+  RouteToOtherSpokesPrivate:
+    Type: AWS::EC2::Route
+    Condition: HasOtherSpokes
+    DependsOn: TransitGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: !Select [0, !Ref OtherSpokeCIDRs]
+      TransitGatewayId: !Ref TransitGatewayId
+
+  # Also add route in public route table to allow public subnet instances to reach other spokes via TGW
+  RouteToOtherSpokesPublic:
+    Type: AWS::EC2::Route
+    Condition: HasOtherSpokes
+    DependsOn: TransitGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: !Select [0, !Ref OtherSpokeCIDRs]
+      TransitGatewayId: !Ref TransitGatewayId
+
 Outputs:
   VPC:
     Description: Spoke VPC ID
