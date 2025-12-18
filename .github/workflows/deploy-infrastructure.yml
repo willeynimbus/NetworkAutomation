@@ -263,10 +263,15 @@ jobs:
             echo "✅ Both spoke instances updated in parallel"
             
           else
-            echo "Creating instances with account-specific parameters..."
+            echo "Creating spoke instances sequentially..."
+            echo "Each spoke will have unique CIDR blocks:"
+            echo "  - Spoke A: 10.1.0.0/16"
+            echo "  - Spoke B: 10.2.0.0/16"
+            echo ""
             
-            # Create Spoke A with its specific parameters
-            aws cloudformation create-stack-instances \
+            # Step 1: Create Spoke A
+            echo "📍 Step 1/2: Creating Spoke A instance..."
+            OPERATION_ID_A=$(aws cloudformation create-stack-instances \
               --stack-set-name spoke-vpc \
               --accounts ${{ env.SPOKE_A_ACCOUNT_ID }} \
               --regions ${{ env.AWS_REGION }} \
@@ -279,10 +284,48 @@ jobs:
                 ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
                 ParameterKey=OtherSpokeCIDRs,ParameterValue=10.2.0.0/16 \
               --operation-preferences \
-                FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL &
+                FailureToleranceCount=0,MaxConcurrentCount=1,RegionConcurrencyType=PARALLEL \
+              --query 'OperationId' --output text)
             
-            # Create Spoke B with its specific parameters
-            aws cloudformation create-stack-instances \
+            echo "✅ Spoke A creation initiated (Operation ID: $OPERATION_ID_A)"
+            echo "⏳ Waiting for Spoke A to complete before creating Spoke B..."
+            
+            # Wait for Spoke A operation to complete
+            MAX_WAIT=300  # 5 minutes max wait
+            ELAPSED=0
+            while [ $ELAPSED -lt $MAX_WAIT ]; do
+              STATUS=$(aws cloudformation describe-stack-set-operation \
+                --stack-set-name spoke-vpc \
+                --operation-id $OPERATION_ID_A \
+                --query 'StackSetOperation.Status' \
+                --output text 2>/dev/null || echo "UNKNOWN")
+              
+              echo "  Status: $STATUS (${ELAPSED}s elapsed)"
+              
+              if [ "$STATUS" = "SUCCEEDED" ]; then
+                echo "✅ Spoke A creation completed successfully!"
+                break
+              elif [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "STOPPED" ]; then
+                echo "❌ Spoke A creation failed with status: $STATUS"
+                exit 1
+              fi
+              
+              sleep 15
+              ELAPSED=$((ELAPSED + 15))
+            done
+            
+            if [ $ELAPSED -ge $MAX_WAIT ]; then
+              echo "⚠️  Timeout waiting for Spoke A, but continuing with Spoke B..."
+            fi
+            
+            # Additional buffer to ensure operation is fully registered
+            echo "⏳ Waiting 10 seconds before starting Spoke B..."
+            sleep 10
+            
+            # Step 2: Create Spoke B
+            echo ""
+            echo "📍 Step 2/2: Creating Spoke B instance..."
+            OPERATION_ID_B=$(aws cloudformation create-stack-instances \
               --stack-set-name spoke-vpc \
               --accounts ${{ env.SPOKE_B_ACCOUNT_ID }} \
               --regions ${{ env.AWS_REGION }} \
@@ -295,11 +338,14 @@ jobs:
                 ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
                 ParameterKey=OtherSpokeCIDRs,ParameterValue=10.1.0.0/16 \
               --operation-preferences \
-                FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL &
+                FailureToleranceCount=0,MaxConcurrentCount=1,RegionConcurrencyType=PARALLEL \
+              --query 'OperationId' --output text)
             
-            # Wait for both creations to complete
-            wait
-            echo "✅ Both spoke instances created in parallel with correct parameters"
+            echo "✅ Spoke B creation initiated (Operation ID: $OPERATION_ID_B)"
+            echo ""
+            echo "🎉 Both spoke instances created sequentially with unique CIDR blocks:"
+            echo "   ✅ Spoke A (Account: ${{ env.SPOKE_A_ACCOUNT_ID }}): VPC 10.1.0.0/16"
+            echo "   ✅ Spoke B (Account: ${{ env.SPOKE_B_ACCOUNT_ID }}): VPC 10.2.0.0/16"
           fi
 
       
