@@ -195,62 +195,54 @@ jobs:
           
           echo "✅ Spoke VPC StackSet ready"
 
-      - name: Deploy Spoke A Instance
-        id: deploy-spoke-a
+      - name: Deploy Both Spoke Instances in Parallel
+        id: deploy-spokes
         run: |
-          echo "Deploying Spoke A instance..."
+          echo "Deploying Spoke A and Spoke B instances in parallel..."
+          
+          # Check if instances already exist
+          SPOKE_A_EXISTS=false
+          SPOKE_B_EXISTS=false
           
           if aws cloudformation describe-stack-instance \
             --stack-set-name spoke-vpc \
             --stack-instance-account ${{ env.SPOKE_A_ACCOUNT_ID }} \
             --stack-instance-region ${{ env.AWS_REGION }} \
             --region ${{ env.AWS_REGION }} 2>/dev/null; then
-            echo "Spoke A instance exists, updating..."
-            aws cloudformation update-stack-instances \
-              --stack-set-name spoke-vpc \
-              --accounts ${{ env.SPOKE_A_ACCOUNT_ID }} \
-              --regions ${{ env.AWS_REGION }} \
-              --parameter-overrides \
-                ParameterKey=EnvironmentName,ParameterValue=SpokeA \
-                ParameterKey=VpcCIDR,ParameterValue=10.1.0.0/16 \
-                ParameterKey=PublicSubnetCIDR,ParameterValue=10.1.1.0/24 \
-                ParameterKey=PrivateSubnetCIDR,ParameterValue=10.1.11.0/24 \
-                ParameterKey=TransitGatewayId,ParameterValue=${{ steps.get-tgw-id.outputs.tgw_id }} \
-                ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
-                ParameterKey=OtherSpokeCIDRs,ParameterValue=10.2.0.0/16 \
-              --operation-preferences \
-                FailureToleranceCount=0,MaxConcurrentCount=1
-          else
-            echo "Creating Spoke A instance..."
-            aws cloudformation create-stack-instances \
-              --stack-set-name spoke-vpc \
-              --accounts ${{ env.SPOKE_A_ACCOUNT_ID }} \
-              --regions ${{ env.AWS_REGION }} \
-              --parameter-overrides \
-                ParameterKey=EnvironmentName,ParameterValue=SpokeA \
-                ParameterKey=VpcCIDR,ParameterValue=10.1.0.0/16 \
-                ParameterKey=PublicSubnetCIDR,ParameterValue=10.1.1.0/24 \
-                ParameterKey=PrivateSubnetCIDR,ParameterValue=10.1.11.0/24 \
-                ParameterKey=TransitGatewayId,ParameterValue=${{ steps.get-tgw-id.outputs.tgw_id }} \
-                ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
-                ParameterKey=OtherSpokeCIDRs,ParameterValue=10.2.0.0/16 \
-              --operation-preferences \
-                FailureToleranceCount=0,MaxConcurrentCount=1
+            SPOKE_A_EXISTS=true
+            echo "✓ Spoke A instance exists"
           fi
-          
-          echo "✅ Spoke A instance deployed"
-
-      - name: Deploy Spoke B Instance
-        id: deploy-spoke-b
-        run: |
-          echo "Deploying Spoke B instance..."
           
           if aws cloudformation describe-stack-instance \
             --stack-set-name spoke-vpc \
             --stack-instance-account ${{ env.SPOKE_B_ACCOUNT_ID }} \
             --stack-instance-region ${{ env.AWS_REGION }} \
             --region ${{ env.AWS_REGION }} 2>/dev/null; then
-            echo "Spoke B instance exists, updating..."
+            SPOKE_B_EXISTS=true
+            echo "✓ Spoke B instance exists"
+          fi
+          
+          # Deploy/Update both instances in parallel
+          if [ "$SPOKE_A_EXISTS" = true ] && [ "$SPOKE_B_EXISTS" = true ]; then
+            echo "Both instances exist, updating in parallel..."
+            
+            # Update Spoke A
+            aws cloudformation update-stack-instances \
+              --stack-set-name spoke-vpc \
+              --accounts ${{ env.SPOKE_A_ACCOUNT_ID }} \
+              --regions ${{ env.AWS_REGION }} \
+              --parameter-overrides \
+                ParameterKey=EnvironmentName,ParameterValue=SpokeA \
+                ParameterKey=VpcCIDR,ParameterValue=10.1.0.0/16 \
+                ParameterKey=PublicSubnetCIDR,ParameterValue=10.1.1.0/24 \
+                ParameterKey=PrivateSubnetCIDR,ParameterValue=10.1.11.0/24 \
+                ParameterKey=TransitGatewayId,ParameterValue=${{ steps.get-tgw-id.outputs.tgw_id }} \
+                ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
+                ParameterKey=OtherSpokeCIDRs,ParameterValue=10.2.0.0/16 \
+              --operation-preferences \
+                FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL &
+            
+            # Update Spoke B
             aws cloudformation update-stack-instances \
               --stack-set-name spoke-vpc \
               --accounts ${{ env.SPOKE_B_ACCOUNT_ID }} \
@@ -264,10 +256,48 @@ jobs:
                 ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
                 ParameterKey=OtherSpokeCIDRs,ParameterValue=10.1.0.0/16 \
               --operation-preferences \
-                FailureToleranceCount=0,MaxConcurrentCount=1
+                FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL &
+            
+            # Wait for both updates to complete
+            wait
+            echo "✅ Both spoke instances updated in parallel"
+            
           else
-            echo "Creating Spoke B instance..."
+            echo "Creating instances in parallel..."
+            
+            # Create both instances in a single command for true parallel deployment
             aws cloudformation create-stack-instances \
+              --stack-set-name spoke-vpc \
+              --accounts ${{ env.SPOKE_A_ACCOUNT_ID }} ${{ env.SPOKE_B_ACCOUNT_ID }} \
+              --regions ${{ env.AWS_REGION }} \
+              --parameter-overrides \
+                ParameterKey=TransitGatewayId,ParameterValue=${{ steps.get-tgw-id.outputs.tgw_id }} \
+                ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
+              --operation-preferences \
+                FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL
+            
+            echo "⏳ Waiting for initial creation to complete..."
+            sleep 30
+            
+            # Now update each with specific parameters
+            echo "Setting account-specific parameters..."
+            
+            aws cloudformation update-stack-instances \
+              --stack-set-name spoke-vpc \
+              --accounts ${{ env.SPOKE_A_ACCOUNT_ID }} \
+              --regions ${{ env.AWS_REGION }} \
+              --parameter-overrides \
+                ParameterKey=EnvironmentName,ParameterValue=SpokeA \
+                ParameterKey=VpcCIDR,ParameterValue=10.1.0.0/16 \
+                ParameterKey=PublicSubnetCIDR,ParameterValue=10.1.1.0/24 \
+                ParameterKey=PrivateSubnetCIDR,ParameterValue=10.1.11.0/24 \
+                ParameterKey=TransitGatewayId,ParameterValue=${{ steps.get-tgw-id.outputs.tgw_id }} \
+                ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
+                ParameterKey=OtherSpokeCIDRs,ParameterValue=10.2.0.0/16 \
+              --operation-preferences \
+                FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL &
+            
+            aws cloudformation update-stack-instances \
               --stack-set-name spoke-vpc \
               --accounts ${{ env.SPOKE_B_ACCOUNT_ID }} \
               --regions ${{ env.AWS_REGION }} \
@@ -280,10 +310,11 @@ jobs:
                 ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
                 ParameterKey=OtherSpokeCIDRs,ParameterValue=10.1.0.0/16 \
               --operation-preferences \
-                FailureToleranceCount=0,MaxConcurrentCount=1
+                FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL &
+            
+            wait
+            echo "✅ Both spoke instances created and configured in parallel"
           fi
-          
-          echo "✅ Spoke B instance deployed"
 
       
 
