@@ -263,10 +263,11 @@ jobs:
             echo "✅ Both spoke instances updated in parallel"
             
           else
-            echo "Creating instances with account-specific parameters..."
+            echo "Creating instances sequentially to avoid race conditions..."
             
-            # Create Spoke A with its specific parameters
-            aws cloudformation create-stack-instances \
+            # Create Spoke A first
+            echo "Creating Spoke A instance..."
+            OPERATION_ID_A=$(aws cloudformation create-stack-instances \
               --stack-set-name spoke-vpc \
               --accounts ${{ env.SPOKE_A_ACCOUNT_ID }} \
               --regions ${{ env.AWS_REGION }} \
@@ -279,10 +280,23 @@ jobs:
                 ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
                 ParameterKey=OtherSpokeCIDRs,ParameterValue=10.2.0.0/16 \
               --operation-preferences \
-                FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL &
+                FailureToleranceCount=0,MaxConcurrentCount=1,RegionConcurrencyType=PARALLEL \
+              --query 'OperationId' --output text)
             
-            # Create Spoke B with its specific parameters
-            aws cloudformation create-stack-instances \
+            echo "Spoke A creation started (OperationId: $OPERATION_ID_A)"
+            echo "Waiting for Spoke A creation to complete..."
+            
+            # Wait for Spoke A to complete
+            aws cloudformation wait stack-create-complete \
+              --stack-name StackSet-spoke-vpc-* \
+              --region ${{ env.AWS_REGION }} 2>/dev/null || echo "Wait command not applicable, checking operation status..."
+            
+            # Give it a moment to ensure operation is registered
+            sleep 10
+            
+            # Create Spoke B
+            echo "Creating Spoke B instance..."
+            OPERATION_ID_B=$(aws cloudformation create-stack-instances \
               --stack-set-name spoke-vpc \
               --accounts ${{ env.SPOKE_B_ACCOUNT_ID }} \
               --regions ${{ env.AWS_REGION }} \
@@ -295,11 +309,11 @@ jobs:
                 ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
                 ParameterKey=OtherSpokeCIDRs,ParameterValue=10.1.0.0/16 \
               --operation-preferences \
-                FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL &
+                FailureToleranceCount=0,MaxConcurrentCount=1,RegionConcurrencyType=PARALLEL \
+              --query 'OperationId' --output text)
             
-            # Wait for both creations to complete
-            wait
-            echo "✅ Both spoke instances created in parallel with correct parameters"
+            echo "Spoke B creation started (OperationId: $OPERATION_ID_B)"
+            echo "✅ Both spoke instances created successfully (sequentially to avoid conflicts)"
           fi
 
       

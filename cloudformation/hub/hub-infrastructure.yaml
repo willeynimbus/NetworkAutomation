@@ -73,10 +73,22 @@ Parameters:
     Type: String
     Default: ''
 
+  SpokeAAttachmentId:
+    Description: Transit Gateway Attachment ID for Spoke A (optional, for route propagation)
+    Type: String
+    Default: ''
+
+  SpokeBAttachmentId:
+    Description: Transit Gateway Attachment ID for Spoke B (optional, for route propagation)
+    Type: String
+    Default: ''
+
 Conditions:
   UseOrgSharing: !And
     - !Equals [ !Ref EnableOrganizationSharing, 'true' ]
     - !Not [ !Equals [ !Ref OrganizationArn, '' ] ]
+  HasSpokeAAttachment: !Not [ !Equals [ !Ref SpokeAAttachmentId, '' ] ]
+  HasSpokeBAttachment: !Not [ !Equals [ !Ref SpokeBAttachmentId, '' ] ]
 Resources:
   # ============================================================================
   # VPC Resources
@@ -249,6 +261,56 @@ Resources:
         - Key: Name
           Value: !Sub ${EnvironmentName}-VPC-TGW-Attachment
 
+  # Transit Gateway Route Table (to route between attachments)
+  TransitGatewayRouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTable
+    Properties:
+      TransitGatewayId: !Ref TransitGateway
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-TGW-RouteTable
+
+  # Associate Hub attachment with TGW route table
+  HubAttachmentAssociation:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties:
+      TransitGatewayAttachmentId: !Ref HubVPCAttachment
+      TransitGatewayRouteTableId: !Ref TransitGatewayRouteTable
+
+  # Propagate Spoke A attachment to the TGW route table (conditional)
+  SpokeAPropagation:
+    Type: AWS::EC2::TransitGatewayRouteTablePropagation
+    Condition: HasSpokeAAttachment
+    Properties:
+      TransitGatewayAttachmentId: !Ref SpokeAAttachmentId
+      TransitGatewayRouteTableId: !Ref TransitGatewayRouteTable
+
+  # Propagate Spoke B attachment to the TGW route table (conditional)
+  SpokeBPropagation:
+    Type: AWS::EC2::TransitGatewayRouteTablePropagation
+    Condition: HasSpokeBAttachment
+    Properties:
+      TransitGatewayAttachmentId: !Ref SpokeBAttachmentId
+      TransitGatewayRouteTableId: !Ref TransitGatewayRouteTable
+
+  # # Explicit TGW Route for Spoke A (fallback if propagation doesn't work)
+  # TransitGatewayRouteSpokeA:
+  #   Type: AWS::EC2::TransitGatewayRoute
+  #   DependsOn: HubAttachmentAssociation
+  #   Properties:
+  #     TransitGatewayRouteTableId: !Ref TransitGatewayRouteTable
+  #     DestinationCidrBlock: !Ref SpokeACIDR
+  #     Blackhole: false
+
+  # # Explicit TGW Route for Spoke B (fallback if propagation doesn't work)
+  # TransitGatewayRouteSpokeB:
+  #   Type: AWS::EC2::TransitGatewayRoute
+  #   DependsOn: HubAttachmentAssociation
+  #   Properties:
+  #     TransitGatewayRouteTableId: !Ref TransitGatewayRouteTable
+  #     DestinationCidrBlock: !Ref SpokeBCIDR
+  #     Blackhole: false
+
   # Routes to Spoke VPCs via Transit Gateway
   HubPrivateRoute1ToSpokeA:
     Type: AWS::EC2::Route
@@ -303,6 +365,19 @@ Resources:
           Value: !Ref EnvironmentName
 
 Outputs:
+  # Transit Gateway Outputs
+  TransitGatewayId:
+    Description: Transit Gateway ID
+    Value: !Ref TransitGateway
+    Export:
+      Name: !Sub ${EnvironmentName}-TGW-ID
+
+  TransitGatewayRouteTableId:
+    Description: Transit Gateway Route Table ID
+    Value: !Ref TransitGatewayRouteTable
+    Export:
+      Name: !Sub ${EnvironmentName}-TGW-RouteTable-ID
+
   # VPC Outputs
   VPC:
     Description: Hub VPC ID
