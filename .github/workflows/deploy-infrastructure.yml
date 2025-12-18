@@ -263,26 +263,10 @@ jobs:
             echo "✅ Both spoke instances updated in parallel"
             
           else
-            echo "Creating instances in parallel..."
+            echo "Creating instances with account-specific parameters..."
             
-            # Create both instances in a single command for true parallel deployment
+            # Create Spoke A with its specific parameters
             aws cloudformation create-stack-instances \
-              --stack-set-name spoke-vpc \
-              --accounts ${{ env.SPOKE_A_ACCOUNT_ID }} ${{ env.SPOKE_B_ACCOUNT_ID }} \
-              --regions ${{ env.AWS_REGION }} \
-              --parameter-overrides \
-                ParameterKey=TransitGatewayId,ParameterValue=${{ steps.get-tgw-id.outputs.tgw_id }} \
-                ParameterKey=HubVpcCIDR,ParameterValue=10.0.0.0/16 \
-              --operation-preferences \
-                FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL
-            
-            echo "⏳ Waiting for initial creation to complete..."
-            sleep 30
-            
-            # Now update each with specific parameters
-            echo "Setting account-specific parameters..."
-            
-            aws cloudformation update-stack-instances \
               --stack-set-name spoke-vpc \
               --accounts ${{ env.SPOKE_A_ACCOUNT_ID }} \
               --regions ${{ env.AWS_REGION }} \
@@ -297,7 +281,8 @@ jobs:
               --operation-preferences \
                 FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL &
             
-            aws cloudformation update-stack-instances \
+            # Create Spoke B with its specific parameters
+            aws cloudformation create-stack-instances \
               --stack-set-name spoke-vpc \
               --accounts ${{ env.SPOKE_B_ACCOUNT_ID }} \
               --regions ${{ env.AWS_REGION }} \
@@ -312,8 +297,9 @@ jobs:
               --operation-preferences \
                 FailureToleranceCount=1,MaxConcurrentCount=2,RegionConcurrencyType=PARALLEL &
             
+            # Wait for both creations to complete
             wait
-            echo "✅ Both spoke instances created and configured in parallel"
+            echo "✅ Both spoke instances created in parallel with correct parameters"
           fi
 
       
