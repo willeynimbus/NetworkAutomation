@@ -1,200 +1,374 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >
-  Hub VPC with Transit Gateway and external RAM sharing.
-  Spoke VPCs will attach separately.
+Description: 'Consolidated Hub Infrastructure - VPC, Transit Gateway, and Resource Sharing'
 
 Parameters:
   EnvironmentName:
+    Description: Environment name prefix for resources
     Type: String
     Default: Hub
-
-  HubVpcCIDR:
+  
+  VpcCIDR:
+    Description: CIDR block for Hub VPC
     Type: String
     Default: 10.0.0.0/16
-
-  HubPublicSubnetCIDR:
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+  
+  PublicSubnet1CIDR:
+    Description: CIDR block for public subnet in AZ1
     Type: String
     Default: 10.0.1.0/24
-
-  HubPrivateSubnetCIDR:
+  
+  PublicSubnet2CIDR:
+    Description: CIDR block for public subnet in AZ2
     Type: String
     Default: 10.0.2.0/24
+  
+  PrivateSubnet1CIDR:
+    Description: CIDR block for private subnet in AZ1
+    Type: String
+    Default: 10.0.11.0/24
+  
+  PrivateSubnet2CIDR:
+    Description: CIDR block for private subnet in AZ2
+    Type: String
+    Default: 10.0.12.0/24
 
+  TransitGatewayDescription:
+    Description: Description for the Transit Gateway
+    Type: String
+    Default: Central Transit Gateway for multi-account networking
+
+  SpokeAAccountId:
+    Description: AWS Account ID for Spoke A
+    Type: String
+    AllowedPattern: '^\d{12}$'
+    ConstraintDescription: Must be a valid 12-digit AWS Account ID
+
+  SpokeBAccountId:
+    Description: AWS Account ID for Spoke B
+    Type: String
+    AllowedPattern: '^\d{12}$'
+    ConstraintDescription: Must be a valid 12-digit AWS Account ID
+
+  SpokeACIDR:
+    Description: CIDR block for Spoke A VPC
+    Type: String
+    Default: 10.1.0.0/16
+
+  SpokeBCIDR:
+    Description: CIDR block for Spoke B VPC
+    Type: String
+    Default: 10.2.0.0/16
+
+  EnableOrganizationSharing:
+    Description: Enable sharing the Transit Gateway via AWS RAM with an Organization ARN (true/false)
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  OrganizationArn:
+    Description: ARN of the AWS Organization or OU to share the TGW with (leave blank to disable)
+    Type: String
+    Default: ''
+
+Conditions:
+  UseOrgSharing: !And
+    - !Equals [ !Ref EnableOrganizationSharing, 'true' ]
+    - !Not [ !Equals [ !Ref OrganizationArn, '' ] ]
 Resources:
-
-  #################################################
-  # HUB VPC
-  #################################################
-  HubVPC:
+  # ============================================================================
+  # VPC Resources
+  # ============================================================================
+  
+  VPC:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: !Ref HubVpcCIDR
-      EnableDnsSupport: true
+      CidrBlock: !Ref VpcCIDR
       EnableDnsHostnames: true
+      EnableDnsSupport: true
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-VPC
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
-  #################################################
-  # Internet Gateway
-  #################################################
-  HubIGW:
+  InternetGateway:
     Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-IGW
 
-  HubIGWAttachment:
+  InternetGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
-      VpcId: !Ref HubVPC
-      InternetGatewayId: !Ref HubIGW
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
 
-  #################################################
-  # Subnets
-  #################################################
-  HubPublicSubnet:
+  # Public Subnets
+  PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
-      VpcId: !Ref HubVPC
-      CidrBlock: !Ref HubPublicSubnetCIDR
+      VpcId: !Ref VPC
       AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref PublicSubnet1CIDR
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub ${EnvironmentName}-Public-Subnet
+          Value: !Sub ${EnvironmentName}-Public-Subnet-AZ1
+        - Key: Type
+          Value: Public
 
-  HubPrivateSubnet:
+  PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
-      VpcId: !Ref HubVPC
-      CidrBlock: !Ref HubPrivateSubnetCIDR
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-Public-Subnet-AZ2
+        - Key: Type
+          Value: Public
+
+  # Private Subnets
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
       AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref PrivateSubnet1CIDR
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub ${EnvironmentName}-Private-Subnet
+          Value: !Sub ${EnvironmentName}-Private-Subnet-AZ1
+        - Key: Type
+          Value: Private
 
-  #################################################
-  # Route Tables
-  #################################################
-  HubPublicRT:
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-Private-Subnet-AZ2
+        - Key: Type
+          Value: Private
+
+  # Public Route Table
+  PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
-      VpcId: !Ref HubVPC
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-Public-Routes
 
-  HubPublicRoute:
+  DefaultPublicRoute:
     Type: AWS::EC2::Route
-    DependsOn: HubIGWAttachment
+    DependsOn: InternetGatewayAttachment
     Properties:
-      RouteTableId: !Ref HubPublicRT
+      RouteTableId: !Ref PublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
-      GatewayId: !Ref HubIGW
+      GatewayId: !Ref InternetGateway
 
-  HubPublicRTAssoc:
+  PublicSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref HubPublicSubnet
-      RouteTableId: !Ref HubPublicRT
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
 
-  HubPrivateRT:
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  # Private Route Tables
+  PrivateRouteTable1:
     Type: AWS::EC2::RouteTable
     Properties:
-      VpcId: !Ref HubVPC
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-Private-Routes-AZ1
 
-  HubPrivateRTAssoc:
+  PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref HubPrivateSubnet
-      RouteTableId: !Ref HubPrivateRT
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
 
-  #################################################
-  # TRANSIT GATEWAY
-  #################################################
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-Private-Routes-AZ2
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref PrivateSubnet2
+
+  # ============================================================================
+  # Transit Gateway Resources
+  # ============================================================================
+  
   TransitGateway:
     Type: AWS::EC2::TransitGateway
     Properties:
       AmazonSideAsn: 64512
+      Description: !Ref TransitGatewayDescription
       AutoAcceptSharedAttachments: enable
-      DefaultRouteTableAssociation: disable
-      DefaultRouteTablePropagation: disable
+      DefaultRouteTableAssociation: enable
+      DefaultRouteTablePropagation: enable
       DnsSupport: enable
       VpnEcmpSupport: enable
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-TGW
 
-  #################################################
-  # TGW ROUTE TABLE
-  #################################################
-  TGWRouteTable:
-    Type: AWS::EC2::TransitGatewayRouteTable
-    Properties:
-      TransitGatewayId: !Ref TransitGateway
-      Tags:
-        - Key: Name
-          Value: !Sub ${EnvironmentName}-TGW-RT
-
-  #################################################
-  # HUB VPC ATTACHMENT
-  #################################################
-  HubTGWAttachment:
+  HubVPCAttachment:
     Type: AWS::EC2::TransitGatewayAttachment
     Properties:
       TransitGatewayId: !Ref TransitGateway
-      VpcId: !Ref HubVPC
+      VpcId: !Ref VPC
       SubnetIds:
-        - !Ref HubPrivateSubnet
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
       Tags:
         - Key: Name
-          Value: !Sub ${EnvironmentName}-Hub-Attachment
+          Value: !Sub ${EnvironmentName}-VPC-TGW-Attachment
 
-  #################################################
-  # TGW ASSOCIATION & PROPAGATION
-  #################################################
-  HubTGWAssociation:
-    Type: AWS::EC2::TransitGatewayRouteTableAssociation
-    Properties:
-      TransitGatewayAttachmentId: !Ref HubTGWAttachment
-      TransitGatewayRouteTableId: !Ref TGWRouteTable
-
-  HubTGWPropagation:
-    Type: AWS::EC2::TransitGatewayRouteTablePropagation
-    Properties:
-      TransitGatewayAttachmentId: !Ref HubTGWAttachment
-      TransitGatewayRouteTableId: !Ref TGWRouteTable
-
-  #################################################
-  # HUB ROUTE TO TGW
-  #################################################
-  HubPrivateRouteToTGW:
+  # Routes to Spoke VPCs via Transit Gateway
+  HubPrivateRoute1ToSpokeA:
     Type: AWS::EC2::Route
-    DependsOn: HubTGWAttachment
+    DependsOn: HubVPCAttachment
     Properties:
-      RouteTableId: !Ref HubPrivateRT
-      DestinationCidrBlock: 10.0.0.0/8
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: !Ref SpokeACIDR
       TransitGatewayId: !Ref TransitGateway
 
-  #################################################
-  # RAM SHARING (EXTERNAL SPOKE ACCOUNTS)
-  #################################################
-  TGWRAMShare:
+  HubPrivateRoute2ToSpokeA:
+    Type: AWS::EC2::Route
+    DependsOn: HubVPCAttachment
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: !Ref SpokeACIDR
+      TransitGatewayId: !Ref TransitGateway
+
+  HubPrivateRoute1ToSpokeB:
+    Type: AWS::EC2::Route
+    DependsOn: HubVPCAttachment
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: !Ref SpokeBCIDR
+      TransitGatewayId: !Ref TransitGateway
+
+  HubPrivateRoute2ToSpokeB:
+    Type: AWS::EC2::Route
+    DependsOn: HubVPCAttachment
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: !Ref SpokeBCIDR
+      TransitGatewayId: !Ref TransitGateway
+
+  # ============================================================================
+  # Resource Access Manager - Share Transit Gateway with Spoke Accounts
+  # ============================================================================
+  
+  TransitGatewayResourceShare:
+    Condition: UseOrgSharing
     Type: AWS::RAM::ResourceShare
     Properties:
-      Name: TGW-External-Share
-      AllowExternalPrincipals: true
+      Name: !Sub ${EnvironmentName}-TGW-Share
+      AllowExternalPrincipals: false
       Principals:
-        - '417371242369'
-        - '414329322210'
+        - !Ref OrganizationArn
       ResourceArns:
-        - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:transit-gateway/${TransitGateway}
+        - !Sub 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:transit-gateway/${TransitGateway}'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-TGW-Share
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
 Outputs:
-  HubVpcId:
+  # VPC Outputs
+  VPC:
     Description: Hub VPC ID
-    Value: !Ref HubVPC
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${EnvironmentName}-VPC-ID
 
+  VpcCIDR:
+    Description: Hub VPC CIDR
+    Value: !Ref VpcCIDR
+    Export:
+      Name: !Sub ${EnvironmentName}-VPC-CIDR
+
+  PublicSubnet1:
+    Description: Public Subnet in AZ1
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub ${EnvironmentName}-PublicSubnet1-ID
+
+  PublicSubnet2:
+    Description: Public Subnet in AZ2
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub ${EnvironmentName}-PublicSubnet2-ID
+
+  PrivateSubnet1:
+    Description: Private Subnet in AZ1
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateSubnet1-ID
+
+  PrivateSubnet2:
+    Description: Private Subnet in AZ2
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateSubnet2-ID
+
+  PrivateRouteTable1:
+    Description: Private Route Table AZ1
+    Value: !Ref PrivateRouteTable1
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateRouteTable1-ID
+
+  PrivateRouteTable2:
+    Description: Private Route Table AZ2
+    Value: !Ref PrivateRouteTable2
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateRouteTable2-ID
+
+  # Transit Gateway Outputs
   TransitGatewayId:
     Description: Transit Gateway ID
     Value: !Ref TransitGateway
+    Export:
+      Name: !Sub ${EnvironmentName}-TGW-ID
 
-  TGWRouteTableId:
-    Description: Transit Gateway Route Table ID
-    Value: !Ref TGWRouteTable
+  HubVPCAttachmentId:
+    Description: Hub VPC Transit Gateway Attachment ID
+    Value: !Ref HubVPCAttachment
+    Export:
+      Name: !Sub ${EnvironmentName}-VPC-TGW-Attachment-ID
+
+  # Resource Share Outputs
+  ResourceShareArn:
+    Description: Transit Gateway Resource Share ARN
+    Condition: UseOrgSharing
+    Value: !Ref TransitGatewayResourceShare
+    Export:
+      Name: !Sub ${EnvironmentName}-TGW-ResourceShare-ARN
